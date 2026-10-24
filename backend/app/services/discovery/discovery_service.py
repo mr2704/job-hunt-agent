@@ -12,7 +12,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Company, Job
+from app.models.models import Company, Job, utc_now_naive
 from app.services.discovery.bsm_adapter import BSMAdapter
 from app.services.discovery.ats_fetcher import ATSFetcher
 import httpx
@@ -61,7 +61,7 @@ class DiscoveryService:
             try:
                 db_company = await self._upsert_company(c)
                 company_id_map[c["slug"]] = db_company.id
-                if db_company.discovered_at and (datetime.now(timezone.utc) - db_company.discovered_at).seconds < 60:
+                if db_company.discovered_at and (utc_now_naive() - db_company.discovered_at).seconds < 60:
                     stats["companies_new"] += 1
             except Exception as exc:
                 logger.error("company_upsert_error", slug=c.get("slug"), error=str(exc))
@@ -132,8 +132,8 @@ class DiscoveryService:
                 funding_stage=data.get("funding_stage"),
                 bsm_url=data.get("bsm_url"),
                 extra_data=data.get("raw_data"),
-                discovered_at=datetime.now(timezone.utc),
-                last_verified_at=datetime.now(timezone.utc),
+                discovered_at=utc_now_naive(),
+                last_verified_at=utc_now_naive(),
             )
             self.db.add(company)
         else:
@@ -145,7 +145,7 @@ class DiscoveryService:
             company.website = data.get("website") or company.website
             company.logo_url = data.get("logo_url") or company.logo_url
             company.funding_stage = data.get("funding_stage") or company.funding_stage
-            company.last_verified_at = datetime.now(timezone.utc)
+            company.last_verified_at = utc_now_naive()
             company.is_active = True
 
         await self.db.flush()
@@ -202,8 +202,8 @@ class DiscoveryService:
                 ats_platform=ats_platform,
                 external_job_id=external_id,
                 posted_at=self._parse_datetime(data.get("posted_at")),
-                discovered_at=datetime.now(timezone.utc),
-                last_verified_at=datetime.now(timezone.utc),
+                discovered_at=utc_now_naive(),
+                last_verified_at=utc_now_naive(),
                 status="discovered",
                 extraction_confidence=data.get("extraction_confidence"),
                 raw_data=data.get("raw_data"),
@@ -211,7 +211,7 @@ class DiscoveryService:
             self.db.add(job)
         else:
             # Update verification timestamp and mutable fields
-            existing.last_verified_at = datetime.now(timezone.utc)
+            existing.last_verified_at = utc_now_naive()
             existing.status = "open"
             existing.application_url = data.get("application_url") or existing.application_url
             existing.original_url = data.get("original_url") or existing.original_url

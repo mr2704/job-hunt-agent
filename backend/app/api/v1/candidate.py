@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
 from app.core.database import get_db
-from app.models.models import CandidateProfile, ResumeVersion
+from app.models.models import CandidateProfile, ResumeVersion, utc_now_naive
 from app.schemas.schemas import CandidateProfileOut, CandidateProfileUpdate
 from app.services.candidate.resume_parser import ResumeParser
 
@@ -258,7 +258,7 @@ async def confirm_profile(
         }
 
     profile.is_confirmed = True
-    profile.confirmed_at = datetime.now(timezone.utc)
+    profile.confirmed_at = utc_now_naive()
     await db.commit()
 
     return {

@@ -31,8 +31,13 @@ def _uuid() -> uuid.UUID:
     return uuid.uuid4()
 
 
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
+def utc_now_naive() -> datetime:
+    """Return current UTC time as an offset-naive datetime for TIMESTAMP WITHOUT TIME ZONE columns."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _now(*args, **kwargs) -> datetime:
+    return utc_now_naive()
 
 
 # ─── Company ──────────────────────────────────────────────────────────────────
