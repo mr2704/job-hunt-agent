@@ -86,8 +86,9 @@ def create_app() -> FastAPI:
         except Exception:
             db_status = "down"
 
+        is_healthy = db_status == "up" and schema_rev is not None
         return {
-            "status": "ok" if db_status == "up" else "degraded",
+            "status": "ok" if is_healthy else "degraded",
             "database": db_status,
             "schema_revision": schema_rev,
             "version": "0.1.0",

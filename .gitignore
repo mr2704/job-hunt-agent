@@ -51,6 +51,12 @@ candidate_data/**/*.pdf
 resumes/**/*.pdf
 generated/**/*.pdf
 output/**/*.pdf
+_trash/**/*.pdf
+**/_trash/**/*.pdf
+
+# Whitelist test fixtures
+!tests/fixtures/**
+!backend/tests/fixtures/**
 
 # Database
 *.db
