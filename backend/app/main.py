@@ -8,12 +8,12 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
-from app.api.v1 import jobs, companies, discovery, candidate, dashboard
+from app.api.v1 import candidate, companies, dashboard, discovery, jobs
 from app.core.config import get_settings
 from app.core.database import engine
 from app.core.logging import configure_logging
-from app.models.models import Base
 
 settings = get_settings()
 configure_logging()
@@ -21,9 +21,13 @@ configure_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Create tables on startup (migrations handle schema; this is a safety net)."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    """Startup probe: test connectivity with SELECT 1, degrade gracefully (Alembic owns schema)."""
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+    except Exception:
+        # Gracefully degrade startup if database is unreachable; do not crash
+        pass
     yield
     await engine.dispose()
 
@@ -42,12 +46,14 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
     )
 
-    # CORS — allow Next.js frontend
+    # CORS — allow Next.js frontend (localhost and 127.0.0.1)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
             f"http://localhost:{settings.frontend_port}",
             "http://localhost:3000",
+            f"http://127.0.0.1:{settings.frontend_port}",
+            "http://127.0.0.1:3000",
         ],
         allow_credentials=True,
         allow_methods=["*"],
@@ -64,9 +70,31 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict:
-        return {"status": "ok", "version": "0.1.0"}
+        db_status = "down"
+        schema_rev: str | None = None
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+                db_status = "up"
+                try:
+                    result = await conn.execute(text("SELECT version_num FROM alembic_version LIMIT 1"))
+                    row = result.fetchone()
+                    if row and row[0]:
+                        schema_rev = str(row[0])
+                except Exception:
+                    schema_rev = None
+        except Exception:
+            db_status = "down"
+
+        return {
+            "status": "ok" if db_status == "up" else "degraded",
+            "database": db_status,
+            "schema_revision": schema_rev,
+            "version": "0.1.0",
+        }
 
     return app
 
 
 app = create_app()
+
