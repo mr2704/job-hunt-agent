@@ -40,9 +40,17 @@ yarn-error.log*
 
 # Candidate data (NEVER commit personal info)
 candidate_data/
+_trash/
+**/_trash/
 
-# Resumes (NEVER commit)
+# Resumes and generated outputs (NEVER commit)
 resumes/
+generated/
+output/
+candidate_data/**/*.pdf
+resumes/**/*.pdf
+generated/**/*.pdf
+output/**/*.pdf
 
 # Database
 *.db
