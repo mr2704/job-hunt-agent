@@ -99,9 +99,9 @@ class TestPersonalizationGating:
     def test_confirmed_profile_enables_matching(self):
         """After confirmation, matching should be allowed."""
         from app.models.models import CandidateProfile
-        from datetime import datetime
+        from datetime import datetime, timezone
 
-        confirmed = CandidateProfile(is_confirmed=True, confirmed_at=datetime.utcnow())
+        confirmed = CandidateProfile(is_confirmed=True, confirmed_at=datetime.now(timezone.utc))
         assert confirmed.is_confirmed is True
 
 

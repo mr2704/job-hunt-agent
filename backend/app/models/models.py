@@ -7,7 +7,7 @@ Candidate profile is intentionally EMPTY until the user uploads their resume.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import (
@@ -32,7 +32,7 @@ def _uuid() -> uuid.UUID:
 
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(timezone.utc)
 
 
 # ─── Company ──────────────────────────────────────────────────────────────────

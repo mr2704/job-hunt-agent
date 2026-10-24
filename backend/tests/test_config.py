@@ -54,11 +54,8 @@ class TestConfigHardening:
         monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://jobagent:jobagent@localhost:5432/jobagent")
         monkeypatch.setenv("DATABASE_URL_SYNC", "postgresql://jobagent:jobagent@localhost:5432/jobagent")
 
-        # Clear get_settings cache
-        get_settings.cache_clear()
-
         with pytest.raises(RuntimeError) as exc_info:
-            get_settings()
+            get_settings.__wrapped__()
 
         err_msg = str(exc_info.value)
         # Must NOT leak the secret input value
