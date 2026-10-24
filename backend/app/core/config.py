@@ -8,13 +8,62 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import Field, ValidationError, field_validator
+import structlog
+from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = structlog.get_logger(__name__)
 
 # Deterministic resolution of project root and absolute .env path
 _backend_dir = Path(__file__).resolve().parent.parent.parent
 _repo_dir = _backend_dir.parent if _backend_dir.name == "backend" else _backend_dir
 _env_file_path = _repo_dir / ".env"
+
+KNOWN_PLACEHOLDERS = (
+    "replace_with_random",
+    "replace_me",
+    "dev-secret-key-change-in-production",
+    "dev-secret-key",
+    "changeme",
+    "change-in-production",
+    "your_secret_key",
+    "example",
+)
+
+
+def is_placeholder_secret(value: str) -> bool:
+    """Check whether a secret string matches known template/placeholder values."""
+    if not value:
+        return False
+    lower = value.strip().lower()
+    return any(p in lower for p in KNOWN_PLACEHOLDERS)
+
+
+def format_safe_validation_errors(exc: ValidationError) -> list[dict[str, str]]:
+    """
+    Format Pydantic validation errors safely.
+    Produces only field names and reason categories, strictly preventing
+    sensitive input values from leaking into error strings or logs.
+    """
+    safe_errors: list[dict[str, str]] = []
+    for error in exc.errors():
+        field = str(error["loc"][-1]) if error.get("loc") else "unknown"
+        err_type = error.get("type", "")
+        msg = str(error.get("msg", "")).lower()
+
+        if err_type == "missing":
+            category = "missing"
+        elif "too_short" in err_type or "min_length" in err_type or "at least" in msg:
+            category = "too short"
+        elif "placeholder" in msg or "placeholder" in err_type:
+            category = "placeholder"
+        elif "greater_than" in err_type or "less_than" in err_type:
+            category = "out of range"
+        else:
+            category = "invalid format"
+
+        safe_errors.append({"field": field, "category": category})
+    return safe_errors
 
 
 class Settings(BaseSettings):
@@ -41,7 +90,8 @@ class Settings(BaseSettings):
     llm_provider: Literal["anthropic", "openai"] = "anthropic"
     anthropic_api_key: str = ""
     openai_api_key: str = ""
-    anthropic_model: str = "claude-3-5-sonnet-20241022"
+    # Default model sourced from official Anthropic docs (https://platform.claude.com/docs/en/models/overview):
+    anthropic_model: str = "claude-sonnet-5-5"
     openai_model: str = "gpt-4o"
 
     @property
@@ -55,6 +105,10 @@ class Settings(BaseSettings):
         if self.llm_provider == "anthropic":
             return self.anthropic_model
         return self.openai_model
+
+    @property
+    def secret_key_is_placeholder(self) -> bool:
+        return is_placeholder_secret(self.secret_key)
 
     # ── Discovery ─────────────────────────────────────────────────────────────
     bsm_base_url: str = "https://www.bangalorestartupmap.com"
@@ -90,6 +144,37 @@ class Settings(BaseSettings):
     def _coerce_path(cls, v: str | Path) -> Path:
         return Path(v)
 
+    @model_validator(mode="after")
+    def _validate_placeholders(self) -> Settings:
+        """Reject placeholder secrets in non-development modes; warn in development."""
+        if self.secret_key_is_placeholder:
+            if self.app_env != "development":
+                raise ValueError(
+                    "Placeholder secret detected in secret_key. "
+                    "Placeholders are rejected outside development mode."
+                )
+            logger.warning(
+                "placeholder_secret_detected",
+                field="secret_key",
+                message="SECRET_KEY is using a known placeholder value. Set a real random key for production.",
+            )
+
+        if self.anthropic_api_key and is_placeholder_secret(self.anthropic_api_key):
+            if self.app_env != "development":
+                raise ValueError(
+                    "Placeholder secret detected in anthropic_api_key. "
+                    "Placeholders are rejected outside development mode."
+                )
+
+        if self.openai_api_key and is_placeholder_secret(self.openai_api_key):
+            if self.app_env != "development":
+                raise ValueError(
+                    "Placeholder secret detected in openai_api_key. "
+                    "Placeholders are rejected outside development mode."
+                )
+
+        return self
+
 
 def validate_config() -> dict[str, Any]:
     """
@@ -110,18 +195,16 @@ def validate_config() -> dict[str, Any]:
                 "database_url_sync",
             ],
             "app_env": settings.app_env,
+            "secret_key_is_placeholder": settings.secret_key_is_placeholder,
+            "secret_key_length_valid": len(settings.secret_key) >= 32,
             "backend_port": settings.backend_port,
             "frontend_port": settings.frontend_port,
+            "anthropic_model": settings.anthropic_model,
         }
     except ValidationError as exc:
-        missing: list[str] = []
-        invalid: list[str] = []
-        for error in exc.errors():
-            loc = str(error["loc"][0])
-            if error.get("type") == "missing":
-                missing.append(loc)
-            else:
-                invalid.append(loc)
+        safe_errs = format_safe_validation_errors(exc)
+        missing = [e["field"] for e in safe_errs if e["category"] == "missing"]
+        invalid = [f"{e['field']} ({e['category']})" for e in safe_errs if e["category"] != "missing"]
         return {
             "valid": False,
             "env_file": str(_env_file_path),
@@ -131,7 +214,7 @@ def validate_config() -> dict[str, Any]:
             "message": (
                 f"Configuration incomplete. Missing required environment variable(s): {', '.join(missing)}"
                 if missing
-                else "Configuration has invalid settings."
+                else f"Configuration invalid: {', '.join(invalid)}"
             ),
         }
 
@@ -141,10 +224,9 @@ def get_settings() -> Settings:
     try:
         return Settings()  # type: ignore[call-arg]
     except ValidationError as exc:
-        missing = [str(err["loc"][0]) for err in exc.errors() if err.get("type") == "missing"]
-        if missing:
-            raise RuntimeError(
-                f"Configuration Error: Missing required environment variable(s): {', '.join(missing)}. "
-                f"Please ensure '{_env_file_path}' exists (see .env.example) or environment variables are set."
-            ) from None
-        raise
+        safe_errs = format_safe_validation_errors(exc)
+        err_summaries = [f"'{e['field']}' ({e['category']})" for e in safe_errs]
+        raise RuntimeError(
+            f"Configuration Error: Invalid setting(s) for {', '.join(err_summaries)}. "
+            f"Please check your environment configuration or .env file."
+        ) from None
