@@ -74,3 +74,5 @@ test-results/
 
 # Docker volumes
 pgdata/
+
+!frontend/src/lib/
