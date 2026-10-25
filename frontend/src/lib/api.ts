@@ -225,6 +225,14 @@ export const api = {
   },
 
   // Health
-  health: () => request<{ status: string }>('/health').catch(() => null),
+  health: async (): Promise<{ status: string; database?: string; schema_revision?: string; version?: string } | null> => {
+    try {
+      const res = await fetch(`${BASE}/health`);
+      if (!res.ok) return null;
+      return (await res.json()) as { status: string; database?: string; schema_revision?: string; version?: string };
+    } catch {
+      return null;
+    }
+  },
 };
 
