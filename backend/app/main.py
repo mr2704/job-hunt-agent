@@ -10,12 +10,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api.v1 import candidate, companies, dashboard, discovery, jobs
+from app.api.v1 import candidate, companies, dashboard, discovery, jobs, settings
 from app.core.config import get_settings
 from app.core.database import engine
 from app.core.logging import configure_logging
 
-settings = get_settings()
+settings_cfg = get_settings()
 configure_logging()
 
 
@@ -50,9 +50,9 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
-            f"http://localhost:{settings.frontend_port}",
+            f"http://localhost:{settings_cfg.frontend_port}",
             "http://localhost:3000",
-            f"http://127.0.0.1:{settings.frontend_port}",
+            f"http://127.0.0.1:{settings_cfg.frontend_port}",
             "http://127.0.0.1:3000",
         ],
         allow_credentials=True,
@@ -67,6 +67,7 @@ def create_app() -> FastAPI:
     app.include_router(companies.router, prefix=prefix)
     app.include_router(discovery.router, prefix=prefix)
     app.include_router(candidate.router, prefix=prefix)
+    app.include_router(settings.router, prefix=prefix)
 
     @app.get("/health")
     async def health() -> dict:
