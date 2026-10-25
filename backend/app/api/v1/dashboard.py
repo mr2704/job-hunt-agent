@@ -24,7 +24,12 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)) -> DashboardSt
 
     # Personalized stats only available after profile confirmation
     profile_result = await db.execute(
-        select(CandidateProfile).where(CandidateProfile.is_confirmed.is_(True)).limit(1)
+        select(CandidateProfile)
+        .where(
+            CandidateProfile.is_confirmed.is_(True),
+            CandidateProfile.archived_at.is_(None),
+        )
+        .limit(1)
     )
     profile = profile_result.scalar_one_or_none()
     has_confirmed_profile = profile is not None

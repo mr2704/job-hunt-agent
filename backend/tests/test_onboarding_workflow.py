@@ -350,8 +350,8 @@ class TestProfileIntegrityAndLifecycle:
             assert path1 != path2
 
     @pytest.mark.asyncio
-    async def test_delete_profile_cleans_up_disk_files(self, tmp_path):
-        """Deleting candidate profile cleans up associated resume files from disk."""
+    async def test_delete_profile_soft_delete_preserves_files_and_sets_archived_at(self, tmp_path):
+        """Soft deleting candidate profile sets archived_at and preserves resume files on disk."""
         settings = get_settings()
         with patch.object(settings, "upload_dir", tmp_path):
             pdf_path = settings.upload_dir_abs / "resumes" / "base" / "test_delete.pdf"
@@ -370,9 +370,12 @@ class TestProfileIntegrityAndLifecycle:
             mock_result.scalars.return_value.all.return_value = [profile]
             db.execute = AsyncMock(return_value=mock_result)
             db.delete = AsyncMock()
-            await delete_profile(confirm="DELETE_ALL_CANDIDATE_DATA", db=db)
+            db.commit = AsyncMock()
+            res = await delete_profile(confirm="DELETE_ALL_CANDIDATE_DATA", db=db)
 
-            assert not pdf_path.exists()
-            trash_dir = settings.upload_dir_abs / "_trash"
-            assert trash_dir.exists()
-            assert len(list(trash_dir.glob("*test_delete.pdf"))) == 1
+            assert "archived" in res["message"].lower()
+            assert "deleted" not in res["message"].lower()
+            db.delete.assert_not_called()
+            assert profile.archived_at is not None
+            assert pdf_path.exists()
+

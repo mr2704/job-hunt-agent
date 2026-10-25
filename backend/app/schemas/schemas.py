@@ -116,6 +116,7 @@ class CandidateProfileOut(BaseModel):
     work_authorization: str | None
     is_confirmed: bool
     confirmed_at: datetime | None
+    archived_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

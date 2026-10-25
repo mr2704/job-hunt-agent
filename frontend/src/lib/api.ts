@@ -254,7 +254,7 @@ export const api = {
     return res.json();
   },
 
-  deleteProfile: (confirm: string = 'DELETE_ALL_CANDIDATE_DATA') =>
+  deleteProfile: (confirm: string) =>
     request<{ message: string; archived_count: number }>(`/candidate/profile?confirm=${encodeURIComponent(confirm)}`, {
       method: 'DELETE',
     }),

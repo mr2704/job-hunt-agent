@@ -18,12 +18,17 @@ from fastapi import HTTPException
 from pypdf import PdfWriter
 
 from app.api.v1.candidate import (
+    confirm_profile,
+    create_new_profile_version,
     delete_profile,
+    get_profile,
+    update_profile,
     upload_latex_zip,
     upload_resume,
 )
 from app.core.config import get_settings
-from app.models.models import CandidateProfile, ResumeVersion
+from app.models.models import CandidateProfile, ResumeVersion, utc_now_naive
+from app.schemas.schemas import CandidateProfileUpdate
 
 
 def create_minimal_pdf() -> bytes:
@@ -70,8 +75,8 @@ class TestSafeDelete:
         assert "DELETE_ALL_CANDIDATE_DATA" in exc.value.detail
 
     @pytest.mark.asyncio
-    async def test_delete_profile_archives_to_trash(self, tmp_path):
-        """F12: Candidate files must be moved to _trash/ after DB commit, never permanently unlinked."""
+    async def test_delete_profile_soft_deletes_and_preserves_row_count(self, tmp_path):
+        """F12: DELETE /candidate/profile sets archived_at, never removes rows, preserves files, and answers 'archived'."""
         settings = get_settings()
         with patch.object(settings, "upload_dir", tmp_path):
             base_dir = settings.upload_dir_abs / "resumes" / "base"
@@ -94,17 +99,141 @@ class TestSafeDelete:
             db.commit = AsyncMock()
 
             res = await delete_profile(confirm="DELETE_ALL_CANDIDATE_DATA", db=db)
-            assert "deleted" in res["message"].lower() or "archived" in res["message"].lower()
+            
+            # Answer must say "archived" and NEVER "deleted"
+            assert "archived" in res["message"].lower()
+            assert "deleted" not in res["message"].lower()
 
-            # Original path must no longer exist
-            assert not pdf_path.exists()
+            # Row count must not change: db.delete must NOT be called on any model row
+            db.delete.assert_not_called()
+            assert profile.archived_at is not None
 
-            # But the file must exist inside _trash/ with original content intact
-            trash_dir = settings.upload_dir_abs / "_trash"
-            assert trash_dir.exists()
-            trash_files = list(trash_dir.glob("*candidate_resume.pdf"))
-            assert len(trash_files) == 1, f"Expected archived file in _trash, found: {list(trash_dir.iterdir())}"
-            assert trash_files[0].read_bytes() == b"%PDF-1.4 test resume"
+            # Original files must stay recoverable and intact in place
+            assert pdf_path.exists()
+            assert pdf_path.read_bytes() == b"%PDF-1.4 test resume"
+            assert db.commit.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_archived_profiles_invisible_to_get_profile(self):
+        """Every reader excluding get_profile must not return archived profiles."""
+        archived_id = uuid.uuid4()
+        archived_profile = CandidateProfile(id=archived_id, archived_at=utc_now_naive(), full_name="Archived Candidate")
+
+        db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        db.execute = AsyncMock(return_value=mock_result)
+
+        # GET by id
+        res = await get_profile(profile_id=archived_id, db=db)
+        assert res is None
+
+        # GET latest
+        res_latest = await get_profile(profile_id=None, db=db)
+        assert res_latest is None
+
+        # Verify query filters on CandidateProfile.archived_at.is_(None)
+        executed_query = str(db.execute.call_args[0][0])
+        assert "archived_at IS NULL" in executed_query
+
+    @pytest.mark.asyncio
+    async def test_archived_profiles_invisible_to_update_profile(self):
+        """Updating an archived profile must return 404."""
+        archived_id = uuid.uuid4()
+        db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        db.execute = AsyncMock(return_value=mock_result)
+
+        updates = CandidateProfileUpdate(full_name="New Name")
+        with pytest.raises(HTTPException) as exc:
+            await update_profile(updates=updates, profile_id=archived_id, db=db)
+        assert exc.value.status_code == 404
+        executed_query = str(db.execute.call_args[0][0])
+        assert "archived_at IS NULL" in executed_query
+
+    @pytest.mark.asyncio
+    async def test_archived_profiles_invisible_to_confirm_profile(self):
+        """Confirming an archived profile must return 404."""
+        archived_id = uuid.uuid4()
+        db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        db.execute = AsyncMock(return_value=mock_result)
+
+        with pytest.raises(HTTPException) as exc:
+            await confirm_profile(profile_id=archived_id, db=db)
+        assert exc.value.status_code == 404
+        executed_query = str(db.execute.call_args[0][0])
+        assert "archived_at IS NULL" in executed_query
+
+    @pytest.mark.asyncio
+    async def test_archived_profiles_invisible_to_new_version(self):
+        """Creating a new version from an archived profile must fail with 400."""
+        archived_id = uuid.uuid4()
+        db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        db.execute = AsyncMock(return_value=mock_result)
+
+        with pytest.raises(HTTPException) as exc:
+            await create_new_profile_version(base_profile_id=archived_id, db=db)
+        assert exc.value.status_code == 400
+        executed_query = str(db.execute.call_args[0][0])
+        assert "archived_at IS NULL" in executed_query
+
+    @pytest.mark.asyncio
+    async def test_archived_profiles_invisible_to_latex_upload(self):
+        """Uploading LaTeX for an archived profile must return 404."""
+        archived_id = uuid.uuid4()
+        db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        db.execute = AsyncMock(return_value=mock_result)
+
+        upload_file = MockUploadFile(filename="latex.zip", content=b"fake")
+        with pytest.raises(HTTPException) as exc:
+            await upload_latex_zip(file=upload_file, profile_id=archived_id, db=db)
+        assert exc.value.status_code == 404
+        executed_query = str(db.execute.call_args[0][0])
+        assert "archived_at IS NULL" in executed_query
+
+    @pytest.mark.asyncio
+    async def test_archived_confirmed_profile_allows_reupload(self, tmp_path):
+        """An archived profile that was previously confirmed must not block new uploads."""
+        settings = get_settings()
+        with patch.object(settings, "upload_dir", tmp_path):
+            db = AsyncMock()
+            mock_result = MagicMock()
+            # Active confirmed profile query returns None because the confirmed profile is archived
+            mock_result.scalar_one_or_none.return_value = None
+            db.execute = AsyncMock(return_value=mock_result)
+            db.add = MagicMock()
+            db.commit = AsyncMock()
+
+            pdf = MockUploadFile(filename="new.pdf", content=create_minimal_pdf())
+            res = await upload_resume(file=pdf, db=db)
+            assert "profile_id" in res
+            executed_query = str(db.execute.call_args[0][0])
+            assert "archived_at IS NULL" in executed_query
+
+    @pytest.mark.asyncio
+    async def test_restore_profile(self):
+        """restore_profile sets archived_at to None, commits, and returns the profile."""
+        from app.api.v1.candidate import restore_profile
+
+        profile_id = uuid.uuid4()
+        profile = CandidateProfile(id=profile_id, archived_at=utc_now_naive(), full_name="Restored Candidate")
+        db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = profile
+        db.execute = AsyncMock(return_value=mock_result)
+        db.commit = AsyncMock()
+
+        restored = await restore_profile(profile_id=profile_id, db=db)
+        assert restored.archived_at is None
+        assert db.commit.await_count == 1
+
 
 
 # ─── F13: LATEX UPLOAD HARDENING TESTS ────────────────────────────────────────

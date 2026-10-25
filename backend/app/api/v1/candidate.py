@@ -39,11 +39,17 @@ async def get_profile(
     """Return the candidate profile by id or latest, or null if not yet created."""
     if profile_id:
         result = await db.execute(
-            select(CandidateProfile).where(CandidateProfile.id == profile_id)
+            select(CandidateProfile).where(
+                CandidateProfile.id == profile_id,
+                CandidateProfile.archived_at.is_(None),
+            )
         )
     else:
         result = await db.execute(
-            select(CandidateProfile).order_by(CandidateProfile.created_at.desc()).limit(1)
+            select(CandidateProfile)
+            .where(CandidateProfile.archived_at.is_(None))
+            .order_by(CandidateProfile.created_at.desc())
+            .limit(1)
         )
     profile = result.scalar_one_or_none()
     if not profile:
@@ -133,7 +139,10 @@ async def upload_resume(
     # F17: Re-upload must not silently replace a confirmed profile
     confirmed_check = await db.execute(
         select(CandidateProfile)
-        .where(CandidateProfile.is_confirmed.is_(True))
+        .where(
+            CandidateProfile.is_confirmed.is_(True),
+            CandidateProfile.archived_at.is_(None),
+        )
         .order_by(CandidateProfile.created_at.desc())
         .limit(1)
     )
@@ -215,11 +224,14 @@ async def upload_latex_zip(
             detail="profile_id query parameter is required.",
         )
 
-    # Verify base resume exists for this profile_id (F13)
+    # Verify base resume exists for an active (non-archived) candidate profile (F13)
     result = await db.execute(
-        select(ResumeVersion).where(
+        select(ResumeVersion)
+        .join(CandidateProfile, ResumeVersion.profile_id == CandidateProfile.id)
+        .where(
             ResumeVersion.profile_id == profile_id,
             ResumeVersion.is_base.is_(True),
+            CandidateProfile.archived_at.is_(None),
         )
     )
     rv = result.scalar_one_or_none()
@@ -344,11 +356,17 @@ async def update_profile(
     """Update editable fields in the candidate profile before confirmation."""
     if profile_id:
         result = await db.execute(
-            select(CandidateProfile).where(CandidateProfile.id == profile_id)
+            select(CandidateProfile).where(
+                CandidateProfile.id == profile_id,
+                CandidateProfile.archived_at.is_(None),
+            )
         )
     else:
         result = await db.execute(
-            select(CandidateProfile).order_by(CandidateProfile.created_at.desc()).limit(1)
+            select(CandidateProfile)
+            .where(CandidateProfile.archived_at.is_(None))
+            .order_by(CandidateProfile.created_at.desc())
+            .limit(1)
         )
     profile = result.scalar_one_or_none()
     if not profile:
@@ -380,13 +398,19 @@ async def create_new_profile_version(
         result = await db.execute(
             select(CandidateProfile)
             .options(selectinload(CandidateProfile.resume_versions))
-            .where(CandidateProfile.id == base_profile_id)
+            .where(
+                CandidateProfile.id == base_profile_id,
+                CandidateProfile.archived_at.is_(None),
+            )
         )
     else:
         result = await db.execute(
             select(CandidateProfile)
             .options(selectinload(CandidateProfile.resume_versions))
-            .where(CandidateProfile.is_confirmed.is_(True))
+            .where(
+                CandidateProfile.is_confirmed.is_(True),
+                CandidateProfile.archived_at.is_(None),
+            )
             .order_by(CandidateProfile.version.desc(), CandidateProfile.created_at.desc())
             .limit(1)
         )
@@ -478,7 +502,10 @@ async def confirm_profile(
         )
 
     result = await db.execute(
-        select(CandidateProfile).where(CandidateProfile.id == profile_id)
+        select(CandidateProfile).where(
+            CandidateProfile.id == profile_id,
+            CandidateProfile.archived_at.is_(None),
+        )
     )
     profile = result.scalar_one_or_none()
     if not profile:
@@ -516,12 +543,12 @@ async def confirm_profile(
 
 @router.delete("/profile")
 async def delete_profile(
-    confirm: str = Query(..., description="Confirmation token required to delete all candidate data"),
+    confirm: str = Query(..., description="Confirmation token required to archive all candidate data"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """
-    Safely delete all candidate profile records from database and archive
-    uploaded resume files to candidate_data/_trash. Never hard-deletes files.
+    Safely soft-delete (archive) all active candidate profile records by setting
+    archived_at timestamp. Never deletes database rows. Preserves original files in place.
     """
     if confirm != DELETE_CONFIRMATION_TOKEN:
         raise HTTPException(
@@ -530,51 +557,47 @@ async def delete_profile(
         )
 
     result = await db.execute(
-        select(CandidateProfile).options(selectinload(CandidateProfile.resume_versions))
+        select(CandidateProfile)
+        .where(CandidateProfile.archived_at.is_(None))
+        .options(selectinload(CandidateProfile.resume_versions))
     )
     profiles = result.scalars().all()
     if not profiles:
-        return {"message": "No candidate profiles found to delete.", "archived_count": 0}
+        return {"message": "No active candidate profiles found to archive.", "archived_count": 0}
 
-    # Collect files to archive
-    files_to_archive: list[Path] = []
+    now = utc_now_naive()
     for p in profiles:
-        for rv in p.resume_versions:
-            if rv.pdf_path:
-                p_path = Path(rv.pdf_path)
-                if not p_path.is_absolute():
-                    p_path = settings.base_dir / p_path
-                if p_path.is_file():
-                    files_to_archive.append(p_path)
-            if rv.latex_zip_path:
-                z_path = Path(rv.latex_zip_path)
-                if not z_path.is_absolute():
-                    z_path = settings.base_dir / z_path
-                if z_path.is_file():
-                    files_to_archive.append(z_path)
-        await db.delete(p)
+        p.archived_at = now
 
-    # Commit DB deletion first
     await db.commit()
 
-    # Move files to _trash only AFTER DB commit succeeds (never hard-delete)
-    trash_dir = settings.upload_dir_abs / "_trash"
-    trash_dir.mkdir(parents=True, exist_ok=True)
-    archived_count = 0
-    timestamp = utc_now_naive().strftime("%Y%m%d_%H%M%S")
-
-    for file_path in files_to_archive:
-        if file_path.is_file():
-            unique_name = f"{timestamp}_{uuid.uuid4().hex[:6]}_{file_path.name}"
-            dest = trash_dir / unique_name
-            try:
-                shutil.move(str(file_path), str(dest))
-                archived_count += 1
-            except OSError as err:
-                logger.warning("archive_file_failed", file=str(file_path), error=str(err))
-
     return {
-        "message": f"All candidate data deleted. {archived_count} files safely archived to _trash.",
-        "archived_count": archived_count,
+        "message": f"All candidate data safely archived ({len(profiles)} profile(s) archived).",
+        "archived_count": len(profiles),
     }
+
+
+async def restore_profile(
+    profile_id: uuid.UUID,
+    db: AsyncSession,
+) -> CandidateProfile:
+    """
+    Restore an archived candidate profile by clearing its archived_at timestamp.
+    """
+    result = await db.execute(
+        select(CandidateProfile).where(
+            CandidateProfile.id == profile_id,
+            CandidateProfile.archived_at.is_not(None),
+        )
+    )
+    profile = result.scalar_one_or_none()
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No archived candidate profile found with id {profile_id}.",
+        )
+    profile.archived_at = None
+    profile.updated_at = utc_now_naive()
+    await db.commit()
+    return profile
 
