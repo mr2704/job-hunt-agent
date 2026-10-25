@@ -46,9 +46,14 @@ class MockUploadFile:
     def __init__(self, filename: str, content: bytes):
         self.filename = filename
         self._content = content
+        self._pos = 0
 
-    async def read(self) -> bytes:
-        return self._content
+    async def read(self, size: int = -1) -> bytes:
+        if size == -1:
+            return self._content
+        chunk = self._content[self._pos : self._pos + size]
+        self._pos += len(chunk)
+        return chunk
 
 
 # ─── 1. UPLOAD VALIDATION TESTS ───────────────────────────────────────────────
@@ -352,8 +357,9 @@ class TestProfileIntegrityAndLifecycle:
             mock_result.scalars.return_value.all.return_value = [profile]
             db.execute = AsyncMock(return_value=mock_result)
             db.delete = AsyncMock()
-            db.commit = AsyncMock()
-
-            await delete_profile(db=db)
+            await delete_profile(confirm="DELETE_ALL_CANDIDATE_DATA", db=db)
 
             assert not pdf_path.exists()
+            trash_dir = settings.upload_dir_abs / "_trash"
+            assert trash_dir.exists()
+            assert len(list(trash_dir.glob("*test_delete.pdf"))) == 1

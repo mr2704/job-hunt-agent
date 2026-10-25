@@ -44,9 +44,9 @@ class ResumeParser:
     Confidence scores indicate extraction reliability, not qualifications.
     """
 
-    async def parse_pdf(self, pdf_file: BytesIO) -> dict[str, Any]:
+    def parse_pdf_sync(self, pdf_file: BytesIO) -> dict[str, Any]:
         """
-        Parse a PDF and extract candidate fields.
+        Parse a PDF and extract candidate fields synchronously.
         Returns a dict suitable for populating CandidateProfile fields.
         All values are nullable; missing fields are null, not inferred.
         """
@@ -179,6 +179,14 @@ class ResumeParser:
         )
 
         return extracted
+
+    async def parse_pdf(self, pdf_file: BytesIO) -> dict[str, Any]:
+        """
+        Parse a PDF and extract candidate fields in a worker thread.
+        Avoids blocking the asyncio event loop on CPU-intensive PDF parsing.
+        """
+        import asyncio
+        return await asyncio.to_thread(self.parse_pdf_sync, pdf_file)
 
     def _extract_text(self, pdf_file: BytesIO) -> str:
         """Extract plain text from a PDF using pdfplumber (primary) or pypdf (fallback)."""
