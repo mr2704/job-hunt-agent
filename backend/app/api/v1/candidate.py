@@ -130,6 +130,20 @@ async def upload_resume(
             detail="The uploaded PDF file is corrupt or malformed, and could not be parsed.",
         )
 
+    # F17: Re-upload must not silently replace a confirmed profile
+    confirmed_check = await db.execute(
+        select(CandidateProfile)
+        .where(CandidateProfile.is_confirmed.is_(True))
+        .order_by(CandidateProfile.created_at.desc())
+        .limit(1)
+    )
+    existing_confirmed = confirmed_check.scalar_one_or_none()
+    if isinstance(existing_confirmed, CandidateProfile) and getattr(existing_confirmed, "is_confirmed", False) is True:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Active profile is already confirmed. Re-uploading would overwrite confirmed candidate state. To make changes, start a new version via POST /api/v1/candidate/profile/new-version.",
+        )
+
     # CPU-intensive PDF parsing in a threadpool (F20)
     parser = ResumeParser()
     extracted = await parser.parse_pdf(io.BytesIO(contents))
@@ -353,28 +367,122 @@ async def update_profile(
     return CandidateProfileOut.model_validate(profile)
 
 
-@router.post("/profile/confirm")
-async def confirm_profile(
-    profile_id: uuid.UUID | None = Query(default=None),
+@router.post("/profile/new-version", response_model=CandidateProfileOut)
+async def create_new_profile_version(
+    base_profile_id: uuid.UUID | None = Query(default=None, description="Base confirmed profile ID to clone"),
     db: AsyncSession = Depends(get_db),
-) -> dict:
+) -> CandidateProfileOut:
     """
-    Confirm the candidate profile. This enables personalized matching and eligibility evaluation.
-    Cannot be undone — start a new profile version to make further changes.
+    Create a new unconfirmed draft profile version cloned from a confirmed profile (F18).
+    Copies candidate attributes and base resume linkage while incrementing the version number.
     """
-    from datetime import datetime, timezone
-
-    if profile_id:
+    if base_profile_id:
         result = await db.execute(
-            select(CandidateProfile).where(CandidateProfile.id == profile_id)
+            select(CandidateProfile)
+            .options(selectinload(CandidateProfile.resume_versions))
+            .where(CandidateProfile.id == base_profile_id)
         )
     else:
         result = await db.execute(
-            select(CandidateProfile).order_by(CandidateProfile.created_at.desc()).limit(1)
+            select(CandidateProfile)
+            .options(selectinload(CandidateProfile.resume_versions))
+            .where(CandidateProfile.is_confirmed.is_(True))
+            .order_by(CandidateProfile.version.desc(), CandidateProfile.created_at.desc())
+            .limit(1)
         )
+    base_profile = result.scalar_one_or_none()
+    if not base_profile or not base_profile.is_confirmed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No confirmed profile found to version. Confirm your current profile first before creating a new version.",
+        )
+
+    new_profile_id = uuid.uuid4()
+    new_version_num = (base_profile.version or 1) + 1
+
+    cloneable_fields = [
+        "full_name",
+        "email",
+        "phone",
+        "location",
+        "linkedin_url",
+        "github_url",
+        "portfolio_url",
+        "degree",
+        "major",
+        "institution",
+        "graduation_year",
+        "cgpa",
+        "cgpa_scale",
+        "percentage",
+        "backlogs",
+        "total_experience_months",
+        "skills",
+        "work_experience",
+        "projects",
+        "certifications",
+        "achievements",
+        "preferred_roles",
+        "preferred_locations",
+        "open_to_remote",
+        "open_to_relocation",
+        "expected_salary_min",
+        "expected_salary_max",
+        "notice_period_days",
+        "work_authorization",
+    ]
+    field_kwargs = {f: getattr(base_profile, f, None) for f in cloneable_fields if hasattr(CandidateProfile, f)}
+
+    new_profile = CandidateProfile(
+        id=new_profile_id,
+        version=new_version_num,
+        is_confirmed=False,
+        confirmed_at=None,
+        **field_kwargs,
+    )
+    db.add(new_profile)
+
+    # Link base resume version if present
+    base_rvs = [rv for rv in (base_profile.resume_versions or []) if rv.is_base]
+    if base_rvs:
+        base_rv = base_rvs[0]
+        new_rv = ResumeVersion(
+            profile_id=new_profile_id,
+            version=1,
+            label=f"v{new_version_num}-base",
+            pdf_path=base_rv.pdf_path,
+            latex_zip_path=base_rv.latex_zip_path,
+            is_base=True,
+            is_tailored=False,
+        )
+        db.add(new_rv)
+
+    await db.commit()
+    return CandidateProfileOut.model_validate(new_profile)
+
+
+@router.post("/profile/confirm")
+async def confirm_profile(
+    profile_id: uuid.UUID = Query(..., description="Candidate profile ID to confirm"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Confirm the candidate profile (F19). Requires profile_id and valid required fields.
+    This enables personalized matching and eligibility evaluation.
+    Cannot be undone — start a new profile version to make further changes.
+    """
+    if not profile_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="profile_id query parameter is required.",
+        )
+
+    result = await db.execute(
+        select(CandidateProfile).where(CandidateProfile.id == profile_id)
+    )
     profile = result.scalar_one_or_none()
     if not profile:
-        raise HTTPException(status_code=404, detail="No profile found.")
+        raise HTTPException(status_code=404, detail=f"No profile found with id {profile_id}.")
 
     if profile.is_confirmed:
         return {
@@ -382,6 +490,18 @@ async def confirm_profile(
             "profile_id": str(profile.id),
             "version": profile.version,
         }
+
+    # F19: Enforce required fields
+    if not profile.full_name or not profile.full_name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot confirm profile: required field 'full_name' is missing. Please complete your profile details first.",
+        )
+    if not profile.email or not profile.email.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot confirm profile: required field 'email' is missing. Please complete your profile details first.",
+        )
 
     profile.is_confirmed = True
     profile.confirmed_at = utc_now_naive()

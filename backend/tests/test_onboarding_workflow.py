@@ -297,7 +297,12 @@ class TestProfileIntegrityAndLifecycle:
     async def test_confirm_profile_scoped_and_authoritative(self):
         """Confirmation marks profile as confirmed and records UTC timestamp."""
         profile_id = uuid.uuid4()
-        draft_profile = CandidateProfile(id=profile_id, is_confirmed=False)
+        draft_profile = CandidateProfile(
+            id=profile_id,
+            full_name="Jane Doe",
+            email="jane.doe@example.com",
+            is_confirmed=False,
+        )
 
         db = AsyncMock()
         mock_result = MagicMock()
