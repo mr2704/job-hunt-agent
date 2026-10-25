@@ -222,8 +222,8 @@ export const api = {
     });
   },
 
-  confirmProfile: (profileId?: string) => {
-    const qs = profileId ? `?profile_id=${encodeURIComponent(profileId)}` : '';
+  confirmProfile: (profileId: string) => {
+    const qs = `?profile_id=${encodeURIComponent(profileId)}`;
     return request<{ message: string; profile_id: string; version?: number }>(
       `/candidate/profile/confirm${qs}`,
       {
@@ -231,6 +231,33 @@ export const api = {
       }
     );
   },
+
+  createProfileNewVersion: (baseProfileId?: string) => {
+    const qs = baseProfileId ? `?base_profile_id=${encodeURIComponent(baseProfileId)}` : '';
+    return request<CandidateProfile>(`/candidate/profile/new-version${qs}`, {
+      method: 'POST',
+    });
+  },
+
+  uploadLatexZip: async (file: File, profileId: string): Promise<{ message: string; path: string }> => {
+    const form = new FormData();
+    form.append('file', file);
+    const qs = `?profile_id=${encodeURIComponent(profileId)}`;
+    const res = await fetch(`${API}/candidate/latex/upload${qs}`, {
+      method: 'POST',
+      body: form,
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.detail || `LaTeX upload failed (HTTP ${res.status})`);
+    }
+    return res.json();
+  },
+
+  deleteProfile: (confirm: string = 'DELETE_ALL_CANDIDATE_DATA') =>
+    request<{ message: string; archived_count: number }>(`/candidate/profile?confirm=${encodeURIComponent(confirm)}`, {
+      method: 'DELETE',
+    }),
 
   // Health
   health: async (): Promise<{ status: string; database?: string; schema_revision?: string; version?: string } | null> => {

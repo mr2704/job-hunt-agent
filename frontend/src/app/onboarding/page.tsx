@@ -279,8 +279,15 @@ function ReviewStep({
   const warnings: string[] = (extracted._warnings as string[]) ?? [];
 
   const validateForm = (): string | null => {
+    if (!fields.full_name.trim()) {
+      return 'Please enter your full name before confirming.';
+    }
+
     const emailTrim = fields.email.trim();
-    if (emailTrim && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTrim)) {
+    if (!emailTrim) {
+      return 'Please enter your email address before confirming.';
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTrim)) {
       return 'Please enter a valid email address (e.g. candidate@example.com).';
     }
 
@@ -523,7 +530,49 @@ function ReviewStep({
   );
 }
 
-function DoneStep() {
+function DoneStep({
+  profileId,
+  onNewVersion,
+}: {
+  profileId?: string;
+  onNewVersion: () => void;
+}) {
+  const [latexFile, setLatexFile] = useState<File | null>(null);
+  const [uploadingLatex, setUploadingLatex] = useState(false);
+  const [latexMessage, setLatexMessage] = useState<string | null>(null);
+  const [latexError, setLatexError] = useState<string | null>(null);
+  const [creatingVersion, setCreatingVersion] = useState(false);
+  const latexInputRef = useRef<HTMLInputElement>(null);
+
+  const handleLatexUpload = async () => {
+    if (!latexFile || !profileId) return;
+    setUploadingLatex(true);
+    setLatexError(null);
+    setLatexMessage(null);
+    try {
+      const res = await api.uploadLatexZip(latexFile, profileId);
+      setLatexMessage(res.message);
+      setLatexFile(null);
+      if (latexInputRef.current) latexInputRef.current.value = '';
+    } catch (err) {
+      setLatexError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUploadingLatex(false);
+    }
+  };
+
+  const handleStartNewVersion = async () => {
+    setCreatingVersion(true);
+    try {
+      await api.createProfileNewVersion(profileId);
+      onNewVersion();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreatingVersion(false);
+    }
+  };
+
   return (
     <div className="onboarding-card" style={{ textAlign: 'center' }}>
       <div
@@ -546,13 +595,68 @@ function DoneStep() {
       <p className="text-muted mb-6">
         Personalized eligibility evaluation and match scoring are now enabled.
       </p>
-      <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
+
+      {/* Optional LaTeX Template Upload */}
+      <div className="card mb-6" style={{ textAlign: 'left', padding: '1.25rem' }}>
+        <h4 style={{ marginBottom: '0.5rem', fontSize: '0.95rem' }}>LaTeX Source Template (Optional)</h4>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginBottom: '1rem' }}>
+          Upload your Overleaf / LaTeX source ZIP. It will be used as the template when generating tailored resumes for jobs.
+        </p>
+
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          <input
+            ref={latexInputRef}
+            type="file"
+            accept=".zip,application/zip"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) setLatexFile(f);
+            }}
+            style={{ fontSize: '0.85rem' }}
+          />
+          <button
+            className="btn btn-secondary"
+            onClick={handleLatexUpload}
+            disabled={!latexFile || uploadingLatex || !profileId}
+            style={{ padding: '0.4rem 0.85rem', fontSize: '0.85rem' }}
+          >
+            {uploadingLatex ? 'Uploading…' : 'Upload ZIP'}
+          </button>
+        </div>
+
+        {latexMessage && (
+          <div className="alert alert-info mt-3" style={{ fontSize: '0.8rem' }}>
+            <CheckCircle2 size={14} /> <span>{latexMessage}</span>
+          </div>
+        )}
+        {latexError && (
+          <div className="alert alert-error mt-3" style={{ fontSize: '0.8rem' }}>
+            <AlertCircle size={14} /> <span>{latexError}</span>
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', marginBottom: '1.5rem' }}>
         <Link href="/jobs" className="btn btn-primary" style={{ textDecoration: 'none' }}>
           Browse Matched Jobs →
         </Link>
         <Link href="/" className="btn btn-secondary" style={{ textDecoration: 'none' }}>
           Dashboard
         </Link>
+      </div>
+
+      <div style={{ borderTop: '1px solid var(--border-default)', paddingTop: '1.25rem' }}>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginBottom: '0.75rem' }}>
+          Need to update your qualifications or education?
+        </p>
+        <button
+          className="btn btn-secondary"
+          onClick={handleStartNewVersion}
+          disabled={creatingVersion}
+          style={{ fontSize: '0.85rem', padding: '0.4rem 1rem' }}
+        >
+          {creatingVersion ? 'Creating…' : 'Create New Profile Version'}
+        </button>
       </div>
     </div>
   );
@@ -561,33 +665,30 @@ function DoneStep() {
 export default function OnboardingPage() {
   const [step, setStep] = useState<Step>('welcome');
   const [uploadResult, setUploadResult] = useState<UploadResumeResponse | null>(null);
+  const [confirmedProfileId, setConfirmedProfileId] = useState<string | undefined>(undefined);
 
-  // Safely check if a profile already exists on initial mount
-  useEffect(() => {
-    let active = true;
+  const loadProfile = () => {
     api
       .getProfile()
       .then((profile) => {
-        if (!active || !profile) return;
+        if (!profile) return;
         if (profile.is_confirmed) {
+          setConfirmedProfileId(profile.id);
           setStep('done');
         } else {
-          // Recover draft profile for review without automatically confirming it
           setUploadResult({
-            message: 'Draft profile recovered',
+            message: 'Draft profile',
             profile_id: profile.id,
             extracted: profile as unknown as Record<string, unknown>,
           });
           setStep('review');
         }
       })
-      .catch(() => {
-        // Silently remain on default welcome step if backend is unreachable
-      });
+      .catch(() => {});
+  };
 
-    return () => {
-      active = false;
-    };
+  useEffect(() => {
+    loadProfile();
   }, []);
 
   return (
@@ -608,12 +709,20 @@ export default function OnboardingPage() {
           <ReviewStep
             extracted={uploadResult.extracted}
             profileId={uploadResult.profile_id}
-            onConfirmed={() => setStep('done')}
+            onConfirmed={() => {
+              setConfirmedProfileId(uploadResult.profile_id);
+              setStep('done');
+            }}
             onReupload={() => setStep('upload')}
           />
         )}
 
-        {step === 'done' && <DoneStep />}
+        {step === 'done' && (
+          <DoneStep
+            profileId={confirmedProfileId || uploadResult?.profile_id}
+            onNewVersion={loadProfile}
+          />
+        )}
       </div>
     </AppShell>
   );
