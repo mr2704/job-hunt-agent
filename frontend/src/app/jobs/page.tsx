@@ -1,16 +1,15 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Search, Filter, ExternalLink, ChevronLeft, ChevronRight,
-  Briefcase, MapPin, Clock, Building2, Zap
+  Briefcase, MapPin, Clock
 } from 'lucide-react';
 import AppShell from '@/components/AppShell';
 import { api, type Job } from '@/lib/api';
 
 const LEVELS = ['Fresher', 'Junior', 'Mid', 'Senior', 'Lead', 'Unspecified'];
 const DEPARTMENTS = ['Engineering', 'Data & AI', 'Product', 'Design', 'Sales & Marketing', 'Operations', 'Other'];
-const ATS_LIST = ['lever', 'greenhouse', 'workable', 'linkedin', 'naukri', 'wellfound', 'unknown'];
 
 function levelColor(level: string | null): string {
   switch (level?.toLowerCase()) {
@@ -32,10 +31,12 @@ function CompanyAvatar({ name, logo }: { name: string; logo?: string | null }) {
   );
 }
 
-function JobCard({ job, onClick }: { job: Job; onClick: () => void }) {
-  const daysAgo = job.discovered_at
-    ? Math.floor((Date.now() - new Date(job.discovered_at).getTime()) / 86400000)
-    : null;
+interface JobWithDaysAgo extends Job {
+  daysAgo?: number | null;
+}
+
+function JobCard({ job, onClick }: { job: JobWithDaysAgo; onClick: () => void }) {
+  const daysAgo = job.daysAgo ?? null;
 
   return (
     <div className="job-card" onClick={onClick} id={`job-card-${job.id}`}>
@@ -179,31 +180,47 @@ function JobDetailPanel({ job, onClose }: { job: Job; onClose: () => void }) {
 }
 
 export default function JobsPage() {
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobs, setJobs] = useState<JobWithDaysAgo[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
   const [q, setQ] = useState('');
   const [level, setLevel] = useState('');
   const [dept, setDept] = useState('');
   const [selected, setSelected] = useState<Job | null>(null);
   const PAGE_SIZE = 24;
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await api.getJobs({ page, page_size: PAGE_SIZE, q, level, department: dept });
-      setJobs(res.items);
-      setTotal(res.total);
-    } catch {
-      setJobs([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [page, q, level, dept]);
+  const currentKey = `${page}|${q}|${level}|${dept}`;
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
+  const loading = loadedKey !== currentKey;
 
-  useEffect(() => { load(); }, [load]);
-  useEffect(() => { setPage(1); }, [q, level, dept]);
+  useEffect(() => {
+    let ignore = false;
+    const reqKey = `${page}|${q}|${level}|${dept}`;
+    api.getJobs({ page, page_size: PAGE_SIZE, q, level, department: dept })
+      .then((res) => {
+        if (!ignore) {
+          const nowMs = Date.now();
+          const itemsWithDaysAgo = res.items.map((item) => ({
+            ...item,
+            daysAgo: item.discovered_at
+              ? Math.floor((nowMs - new Date(item.discovered_at).getTime()) / 86400000)
+              : null,
+          }));
+          setJobs(itemsWithDaysAgo);
+          setTotal(res.total);
+          setLoadedKey(reqKey);
+        }
+      })
+      .catch(() => {
+        if (!ignore) {
+          setJobs([]);
+          setLoadedKey(reqKey);
+        }
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [page, q, level, dept]);
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
 
@@ -226,10 +243,24 @@ export default function JobsPage() {
           <input
             placeholder="Search by title, company, skill…"
             value={q}
-            onChange={e => setQ(e.target.value)}
+            onChange={e => {
+              setQ(e.target.value);
+              setPage(1);
+            }}
             id="job-search-input"
           />
-          {q && <button className="btn btn-ghost btn-sm" onClick={() => setQ('')} style={{ padding: '2px 6px' }}>✕</button>}
+          {q && (
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => {
+                setQ('');
+                setPage(1);
+              }}
+              style={{ padding: '2px 6px' }}
+            >
+              ✕
+            </button>
+          )}
         </div>
 
         <div className="filter-row">
@@ -238,7 +269,10 @@ export default function JobsPage() {
             <span
               key={l}
               className={`filter-chip ${level === l ? 'active' : ''}`}
-              onClick={() => setLevel(level === l ? '' : l)}
+              onClick={() => {
+                setLevel(level === l ? '' : l);
+                setPage(1);
+              }}
               id={`filter-level-${l.toLowerCase()}`}
             >
               {l}
@@ -249,7 +283,10 @@ export default function JobsPage() {
             <span
               key={d}
               className={`filter-chip ${dept === d ? 'active' : ''}`}
-              onClick={() => setDept(dept === d ? '' : d)}
+              onClick={() => {
+                setDept(dept === d ? '' : d);
+                setPage(1);
+              }}
               id={`filter-dept-${d.toLowerCase().replace(/\W+/g, '-')}`}
             >
               {d}

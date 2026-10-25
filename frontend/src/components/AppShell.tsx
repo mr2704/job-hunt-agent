@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -9,7 +9,6 @@ import {
   Building2,
   FileText,
   Settings,
-  Zap,
   Search,
   ChevronRight,
   AlertCircle,
@@ -138,20 +137,23 @@ function Sidebar({ stats }: SidebarProps) {
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const [stats, setStats] = useState<DashboardStats | null>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      const s = await api.getDashboardStats();
-      setStats(s);
-    } catch {
-      // Backend not yet running; ignore
-    }
-  }, []);
-
   useEffect(() => {
-    refresh();
-    const interval = setInterval(refresh, 30_000); // refresh every 30s
-    return () => clearInterval(interval);
-  }, [refresh]);
+    let ignore = false;
+    api.getDashboardStats().then((s) => {
+      if (!ignore) setStats(s);
+    }).catch(() => {});
+
+    const interval = setInterval(() => {
+      api.getDashboardStats().then((s) => {
+        if (!ignore) setStats(s);
+      }).catch(() => {});
+    }, 30_000);
+
+    return () => {
+      ignore = true;
+      clearInterval(interval);
+    };
+  }, []);
 
   return (
     <div className="app-shell">
