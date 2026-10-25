@@ -20,8 +20,8 @@ class TestConfigHardening:
         """In production, placeholder SECRET_KEY must cause startup to fail with safe error."""
         monkeypatch.setenv("APP_ENV", "production")
         monkeypatch.setenv("SECRET_KEY", "REPLACE_WITH_RANDOM_SECRET_KEY_64_CHARS")
-        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://jobagent:jobagent@localhost:5432/jobagent")
-        monkeypatch.setenv("DATABASE_URL_SYNC", "postgresql://jobagent:jobagent@localhost:5432/jobagent")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://jobagent:fake-test-password@localhost:5432/jobagent")
+        monkeypatch.setenv("DATABASE_URL_SYNC", "postgresql://jobagent:fake-test-password@localhost:5432/jobagent")
 
         with pytest.raises(Exception) as exc_info:
             Settings(_env_file=None)
@@ -37,8 +37,8 @@ class TestConfigHardening:
         """In development, placeholder SECRET_KEY is permitted but flagged."""
         monkeypatch.setenv("APP_ENV", "development")
         monkeypatch.setenv("SECRET_KEY", "REPLACE_WITH_RANDOM_SECRET_KEY_64_CHARS")
-        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://jobagent:jobagent@localhost:5432/jobagent")
-        monkeypatch.setenv("DATABASE_URL_SYNC", "postgresql://jobagent:jobagent@localhost:5432/jobagent")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://jobagent:fake-test-password@localhost:5432/jobagent")
+        monkeypatch.setenv("DATABASE_URL_SYNC", "postgresql://jobagent:fake-test-password@localhost:5432/jobagent")
 
         s = Settings(_env_file=None)
         assert s.secret_key_is_placeholder is True
@@ -51,8 +51,8 @@ class TestConfigHardening:
         # Let's test a value that triggers validation error (too short)
         short_secret = "LEAK_ME_123"
         monkeypatch.setenv("SECRET_KEY", short_secret)
-        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://jobagent:jobagent@localhost:5432/jobagent")
-        monkeypatch.setenv("DATABASE_URL_SYNC", "postgresql://jobagent:jobagent@localhost:5432/jobagent")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://jobagent:fake-test-password@localhost:5432/jobagent")
+        monkeypatch.setenv("DATABASE_URL_SYNC", "postgresql://jobagent:fake-test-password@localhost:5432/jobagent")
 
         with pytest.raises(RuntimeError) as exc_info:
             get_settings.__wrapped__()
@@ -69,8 +69,8 @@ class TestConfigHardening:
         """Anthropic model defaults to documented model and is configurable via env."""
         monkeypatch.setenv("APP_ENV", "development")
         monkeypatch.setenv("SECRET_KEY", "a" * 64)
-        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://jobagent:jobagent@localhost:5432/jobagent")
-        monkeypatch.setenv("DATABASE_URL_SYNC", "postgresql://jobagent:jobagent@localhost:5432/jobagent")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://jobagent:fake-test-password@localhost:5432/jobagent")
+        monkeypatch.setenv("DATABASE_URL_SYNC", "postgresql://jobagent:fake-test-password@localhost:5432/jobagent")
         monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
 
         s = Settings(_env_file=None)
@@ -79,3 +79,29 @@ class TestConfigHardening:
         monkeypatch.setenv("ANTHROPIC_MODEL", "claude-haiku-5-5")
         s2 = Settings(_env_file=None)
         assert s2.anthropic_model == "claude-haiku-5-5"
+
+    def test_database_url_placeholder_accepted_in_development(self, monkeypatch):
+        """In development mode, CHANGE_ME_LOCAL_ONLY database placeholder is permitted."""
+        monkeypatch.setenv("APP_ENV", "development")
+        monkeypatch.setenv("SECRET_KEY", "b" * 64)
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://jobagent:CHANGE_ME_LOCAL_ONLY@localhost:5432/jobagent")
+        monkeypatch.setenv("DATABASE_URL_SYNC", "postgresql://jobagent:CHANGE_ME_LOCAL_ONLY@localhost:5432/jobagent")
+
+        s = Settings(_env_file=None)
+        assert s.app_env == "development"
+
+    @pytest.mark.parametrize("env_mode", ["staging", "production"])
+    def test_database_url_placeholder_rejected_outside_development(self, monkeypatch, env_mode):
+        """In staging or production mode, CHANGE_ME_LOCAL_ONLY database placeholder is rejected."""
+        monkeypatch.setenv("APP_ENV", env_mode)
+        monkeypatch.setenv("SECRET_KEY", "c" * 64)
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://jobagent:CHANGE_ME_LOCAL_ONLY@localhost:5432/jobagent")
+        monkeypatch.setenv("DATABASE_URL_SYNC", "postgresql://jobagent:CHANGE_ME_LOCAL_ONLY@localhost:5432/jobagent")
+
+        with pytest.raises(Exception) as exc_info:
+            Settings(_env_file=None)
+
+        err_msg = str(exc_info.value)
+        assert "database_url" in err_msg.lower()
+        assert "placeholder" in err_msg.lower()
+

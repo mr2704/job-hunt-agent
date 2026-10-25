@@ -25,6 +25,9 @@ KNOWN_PLACEHOLDERS = (
     "dev-secret-key-change-in-production",
     "dev-secret-key",
     "changeme",
+    "change_me",
+    "change_me_local_only",
+    "change-me",
     "change-in-production",
     "your_secret_key",
     "example",
@@ -172,6 +175,18 @@ class Settings(BaseSettings):
                     "Placeholder secret detected in openai_api_key. "
                     "Placeholders are rejected outside development mode."
                 )
+
+        if is_placeholder_secret(self.database_url) or is_placeholder_secret(self.database_url_sync):
+            if self.app_env != "development":
+                raise ValueError(
+                    "Placeholder secret detected in database_url. "
+                    "Placeholders are rejected outside development mode."
+                )
+            logger.warning(
+                "placeholder_database_password_detected",
+                field="database_url",
+                message="DATABASE_URL is using a placeholder password (e.g. CHANGE_ME_LOCAL_ONLY). Set a real password for production.",
+            )
 
         return self
 
