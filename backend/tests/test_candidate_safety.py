@@ -138,21 +138,33 @@ class TestLatexUploadHardening:
         assert "no base resume" in exc.value.detail.lower()
 
     @pytest.mark.asyncio
+    @pytest.mark.asyncio
     async def test_latex_upload_rejects_non_zip(self):
         """F13: non-ZIP file with .zip extension must be rejected with 422."""
         db = AsyncMock()
         pid = uuid.uuid4()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = ResumeVersion(id=uuid.uuid4(), profile_id=pid, is_base=True)
+        db.execute = AsyncMock(return_value=mock_result)
+        db.commit = AsyncMock()
+
         upload_file = MockUploadFile(filename="fake.zip", content=b"not a zip file")
         with pytest.raises(HTTPException) as exc:
             await upload_latex_zip(file=upload_file, profile_id=pid, db=db)
         assert exc.value.status_code == 422
         assert "valid zip" in exc.value.detail.lower()
+        db.commit.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_latex_upload_rejects_zip_slip(self):
         """F13: ZIP archive containing path traversal ('../') must be rejected with 422."""
         db = AsyncMock()
         pid = uuid.uuid4()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = ResumeVersion(id=uuid.uuid4(), profile_id=pid, is_base=True)
+        db.execute = AsyncMock(return_value=mock_result)
+        db.commit = AsyncMock()
+
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
             zf.writestr("../evil.tex", b"harmful content")
@@ -162,12 +174,18 @@ class TestLatexUploadHardening:
             await upload_latex_zip(file=upload_file, profile_id=pid, db=db)
         assert exc.value.status_code == 422
         assert "zip-slip" in exc.value.detail.lower() or "traversal" in exc.value.detail.lower() or "unsafe" in exc.value.detail.lower()
+        db.commit.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_latex_upload_rejects_too_many_entries(self):
         """F13: ZIP archive exceeding max allowed files (e.g. >100) must be rejected."""
         db = AsyncMock()
         pid = uuid.uuid4()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = ResumeVersion(id=uuid.uuid4(), profile_id=pid, is_base=True)
+        db.execute = AsyncMock(return_value=mock_result)
+        db.commit = AsyncMock()
+
         files = {f"file_{i}.tex": b"x" for i in range(105)}
         upload_file = MockUploadFile(filename="bomb.zip", content=create_test_zip(files))
 
@@ -175,6 +193,7 @@ class TestLatexUploadHardening:
             await upload_latex_zip(file=upload_file, profile_id=pid, db=db)
         assert exc.value.status_code in (413, 422)
         assert "too many" in exc.value.detail.lower()
+        db.commit.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_latex_upload_returns_relative_path_and_unique_filename(self, tmp_path):
@@ -232,6 +251,9 @@ class TestPdfUploadHardening:
             upload_file = MockUploadFile(filename="resume.pdf", content=pdf_bytes)
 
             db = AsyncMock()
+            mock_result = MagicMock()
+            mock_result.scalar_one_or_none.return_value = None
+            db.execute = AsyncMock(return_value=mock_result)
             db.add = MagicMock()
             # Simulate DB commit failure (e.g. DB connection dropped)
             db.commit = AsyncMock(side_effect=RuntimeError("DB Commit failed"))

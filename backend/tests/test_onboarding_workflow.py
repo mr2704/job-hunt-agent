@@ -68,6 +68,9 @@ class TestUploadValidation:
         upload_file = MockUploadFile(filename="resume.pdf", content=pdf_bytes)
 
         db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        db.execute = AsyncMock(return_value=mock_result)
         db.add = MagicMock()
         db.commit = AsyncMock()
 
@@ -323,6 +326,9 @@ class TestProfileIntegrityAndLifecycle:
         settings = get_settings()
         with patch.object(settings, "upload_dir", tmp_path):
             db = AsyncMock()
+            mock_result = MagicMock()
+            mock_result.scalar_one_or_none.return_value = None
+            db.execute = AsyncMock(return_value=mock_result)
             db.add = MagicMock()
             db.commit = AsyncMock()
 
@@ -333,6 +339,8 @@ class TestProfileIntegrityAndLifecycle:
             res2 = await upload_resume(file=pdf2, db=db)
 
             assert res1["profile_id"] != res2["profile_id"]
+            assert db.commit.await_count == 2
+            assert db.execute.await_count == 2
 
             # Verify both files exist separately on disk
             path1 = settings.upload_dir_abs / "resumes" / "base" / f"{res1['profile_id']}.pdf"
