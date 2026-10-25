@@ -21,7 +21,18 @@ URL_RE = re.compile(r"https?://[^\s,;\"'<>()]+")
 LINKEDIN_RE = re.compile(r"linkedin\.com/in/[\w\-]+", re.IGNORECASE)
 GITHUB_RE = re.compile(r"github\.com/[\w\-]+", re.IGNORECASE)
 CGPA_RE = re.compile(r"\b([0-9]\.[0-9]{1,2})\s*/\s*(4\.0|10\.0|10)\b", re.IGNORECASE)
-PERCENTAGE_RE = re.compile(r"\b([5-9][0-9](?:\.\d+)?|100(?:\.\d+)?)\s*%")
+ACADEMIC_PERCENTAGE_RE = re.compile(
+    r"(?:"
+    r"(?:marks|score|aggregate|percentage|academics|academic|class\s*(?:10|12|x|xii)|10th|12th|board|secondary|higher\s+secondary)"
+    r"[^\n\r\.\;]{0,40}?"
+    r"([5-9][0-9](?:\.\d+)?|100(?:\.\d+)?)\s*%"
+    r"|"
+    r"([5-9][0-9](?:\.\d+)?|100(?:\.\d+)?)\s*%"
+    r"[^\n\r\.\;]{0,40}?"
+    r"(?:marks|score|aggregate|percentage|academics|academic|in\s+(?:10th|12th|class\s*(?:10|12|x|xii)|board))"
+    r")",
+    re.IGNORECASE,
+)
 YEAR_RE = re.compile(r"\b(20\d{2})\b")
 
 
@@ -102,8 +113,12 @@ class ResumeParser:
             extracted["cgpa"] = None
             extracted["cgpa_scale"] = None
 
-        percentage_matches = PERCENTAGE_RE.findall(text)
-        extracted["percentage"] = float(percentage_matches[0]) if percentage_matches else None
+        percentage_matches = []
+        for m in ACADEMIC_PERCENTAGE_RE.finditer(text):
+            val = m.group(1) or m.group(2)
+            if val:
+                percentage_matches.append(float(val))
+        extracted["percentage"] = percentage_matches[0] if percentage_matches else None
 
         # Graduation year: most recent 20xx year in context of "batch" / "pass" / "grad"
         grad_context = re.findall(
@@ -120,20 +135,23 @@ class ResumeParser:
             if years:
                 warnings.append("Graduation year inferred from year mentions. Please verify.")
 
-        # Degree
+        # Degree: highest degree wins (Masters/Doctorate prioritized over Bachelors).
+        # BE regex must not match the common English word 'be'.
         degree_patterns = [
-            (r"\b(B\.?Tech|Bachelor\s+of\s+Technology)\b", "B.Tech"),
-            (r"\b(B\.?E\.?|Bachelor\s+of\s+Engineering)\b", "B.E."),
-            (r"\b(B\.?Sc|Bachelor\s+of\s+Science)\b", "B.Sc."),
+            (r"\b(Ph\.?D\.?|Doctor\s+of\s+Philosophy)\b", "Ph.D."),
             (r"\b(M\.?Tech|Master\s+of\s+Technology)\b", "M.Tech"),
+            (r"(?i:\bMaster\s+of\s+Engineering\b|\bM\.E\.\b|\bM\.E\b)|\bME\b", "M.E."),
             (r"\b(M\.?Sc|Master\s+of\s+Science)\b", "M.Sc."),
             (r"\b(MBA|Master\s+of\s+Business)\b", "MBA"),
             (r"\b(MCA)\b", "MCA"),
+            (r"\b(B\.?Tech|Bachelor\s+of\s+Technology)\b", "B.Tech"),
+            (r"(?i:\bBachelor\s+of\s+Engineering\b|\bB\.E\.\b|\bB\.E\b)|\bBE\b", "B.E."),
+            (r"\b(B\.?Sc|Bachelor\s+of\s+Science)\b", "B.Sc."),
             (r"\b(BCA)\b", "BCA"),
         ]
         extracted["degree"] = None
         for pattern, label in degree_patterns:
-            if re.search(pattern, text, re.IGNORECASE):
+            if re.search(pattern, text, re.IGNORECASE if "BE" not in pattern and "ME" not in pattern else 0):
                 extracted["degree"] = label
                 break
 
@@ -188,21 +206,25 @@ class ResumeParser:
 
     def _extract_skills(self, text: str) -> list[str]:
         """Extract skills from the Skills/Technologies section."""
-        # Look for a skills section
+        # Look for a skills section.
+        # Section header uses case-insensitive group (?i:...),
+        # but section boundary lookahead strictly matches uppercase [A-Z]{3,} without IGNORECASE (F14).
         skills_section = re.search(
-            r"(?:SKILLS|TECHNICAL SKILLS|TECHNOLOGIES|TECH STACK)[:\s]*\n(.*?)(?=\n[A-Z]{3,}|\Z)",
+            r"(?i:SKILLS|TECHNICAL SKILLS|TECHNOLOGIES|TECH STACK)[:\s]*\n(.*?)(?=\n[A-Z]{3,}|\Z)",
             text,
-            re.IGNORECASE | re.DOTALL,
+            re.DOTALL,
         )
         if not skills_section:
             return []
 
         section_text = skills_section.group(1)
         # Split by common delimiters
-        raw_skills = re.split(r"[,|•·\n\t]+", section_text)
+        raw_skills = re.split(r"[,|•·\n\t]+|(?:\s+and\s+)|\s*&\s*", section_text)
         skills = []
         for s in raw_skills:
             s = s.strip().strip("*-•·")
+            if s.lower().startswith("and "):
+                s = s[4:].strip()
             if s and 2 <= len(s) <= 50 and not s.isnumeric():
                 skills.append(s)
         return skills[:60]  # Reasonable cap
@@ -230,10 +252,11 @@ class ResumeParser:
 
     def _extract_projects(self, text: str) -> list[dict] | None:
         """Extract project titles from a Projects section."""
+        # Section boundary lookahead strictly matches uppercase [A-Z]{3,} without IGNORECASE (F14).
         projects_section = re.search(
-            r"(?:PROJECTS?|PERSONAL PROJECTS?|KEY PROJECTS?)[:\s]*\n(.*?)(?=\n[A-Z]{3,}|\Z)",
+            r"(?i:PROJECTS?|PERSONAL PROJECTS?|KEY PROJECTS?)[:\s]*\n(.*?)(?=\n[A-Z]{3,}|\Z)",
             text,
-            re.IGNORECASE | re.DOTALL,
+            re.DOTALL,
         )
         if not projects_section:
             return None
