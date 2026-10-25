@@ -111,6 +111,14 @@ export interface UploadResumeResponse {
   next_step?: string;
 }
 
+export interface SafeSettings {
+  app_env: string;
+  llm_provider: string;
+  llm_model: string;
+  crawl_rate_limit_rps: number;
+  max_upload_size_mb: number;
+}
+
 // ── API functions ─────────────────────────────────────────────────────────
 
 export const api = {
@@ -234,5 +242,8 @@ export const api = {
       return null;
     }
   },
+
+  // Settings (safe read-only)
+  getSettings: () => request<SafeSettings>('/settings'),
 };
 

@@ -21,12 +21,18 @@ interface StatCardProps {
 }
 
 function StatCard({ label, value, icon, color, sub, href }: StatCardProps) {
+  const isStringValue = typeof value === 'string';
   const content = (
     <div className="stat-card">
       <div className="stat-icon" style={{ background: `${color}20`, border: `1px solid ${color}40` }}>
         {icon}
       </div>
-      <div className="stat-value">{value.toLocaleString()}</div>
+      <div
+        className="stat-value"
+        style={isStringValue ? { fontSize: '1.05rem', fontWeight: 600, color: 'var(--text-secondary)', letterSpacing: 'normal' } : undefined}
+      >
+        {typeof value === 'number' ? value.toLocaleString() : value}
+      </div>
       <div className="stat-label">{label}</div>
       {sub && <div className="text-xs text-faint" style={{ marginTop: '0.25rem' }}>{sub}</div>}
     </div>
@@ -99,14 +105,14 @@ export default function DashboardPage() {
   };
 
   const STATS = stats ? [
-    { label: 'Companies', value: stats.total_companies, icon: <Building2 size={18} color="#7c3aed" />, color: '#7c3aed', href: '/companies' },
-    { label: 'Jobs Discovered', value: stats.total_jobs, icon: <Briefcase size={18} color="#06b6d4" />, color: '#06b6d4', href: '/jobs' },
-    { label: 'Open Roles', value: stats.open_jobs, icon: <TrendingUp size={18} color="#10b981" />, color: '#10b981', href: '/jobs' },
-    { label: 'Eligible Jobs', value: stats.eligible_jobs, icon: <CheckCircle2 size={18} color="#10b981" />, color: '#10b981', sub: stats.has_confirmed_profile ? undefined : 'Upload resume to evaluate' },
-    { label: 'High Matches', value: stats.high_match_jobs, icon: <Zap size={18} color="#f59e0b" />, color: '#f59e0b', sub: stats.has_confirmed_profile ? undefined : 'Needs confirmed profile' },
-    { label: 'Awaiting Review', value: stats.applications_awaiting_review, icon: <Clock size={18} color="#f59e0b" />, color: '#f59e0b', href: '/applications' },
-    { label: 'Applied', value: stats.applications_submitted, icon: <FileText size={18} color="#ec4899" />, color: '#ec4899', href: '/applications' },
-    { label: 'Total Applications', value: stats.applications_total, icon: <CheckCircle2 size={18} color="#06b6d4" />, color: '#06b6d4', href: '/applications' },
+    { label: 'Companies', value: stats.total_companies, icon: <Building2 size={18} color="#7c3aed" />, color: '#7c3aed', href: '/companies', sub: 'Real database count' },
+    { label: 'Jobs Discovered', value: stats.total_jobs, icon: <Briefcase size={18} color="#06b6d4" />, color: '#06b6d4', href: '/jobs', sub: 'Real database count' },
+    { label: 'Open Roles', value: stats.open_jobs, icon: <TrendingUp size={18} color="#10b981" />, color: '#10b981', href: '/jobs', sub: 'Active listings' },
+    { label: 'Eligible Jobs', value: 'Not available yet', icon: <CheckCircle2 size={18} color="#10b981" />, color: '#10b981', sub: 'Scheduled in Phase 6' },
+    { label: 'High Matches', value: 'Not available yet', icon: <Zap size={18} color="#f59e0b" />, color: '#f59e0b', sub: 'Scheduled in Phase 6' },
+    { label: 'Awaiting Review', value: 'Not available yet', icon: <Clock size={18} color="#f59e0b" />, color: '#f59e0b', href: '/applications', sub: 'Scheduled in Phase 8' },
+    { label: 'Applied', value: 'Not available yet', icon: <FileText size={18} color="#ec4899" />, color: '#ec4899', href: '/applications', sub: 'Scheduled in Phase 8' },
+    { label: 'Total Applications', value: 'Not available yet', icon: <CheckCircle2 size={18} color="#06b6d4" />, color: '#06b6d4', href: '/applications', sub: 'Scheduled in Phase 8' },
   ] : [];
 
   return (
